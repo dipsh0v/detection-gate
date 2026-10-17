@@ -1,0 +1,34 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+.venv/
+venv/
+.env
+dist/
+build/
+
+# Run output. The lab's own snapshot is committed under lab/ instead, because
+# every published number has to be checkable against the schema it came from.
+schema*.json
+snapshot*.json
+verdicts.json
+report*.html
+sample-report-*.html
+results.sarif
+!lab/schema-snapshot.json
+
+# Third-party checkouts, pinned in pinned-sources.json rather than vendored.
+sigma/
+configs/sysmon-modular/
+
+.DS_Store
+
+# Talk material and model comparison output. Local, not part of the project.
+talk/
+model-comparison*.md

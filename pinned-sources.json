@@ -1,0 +1,33 @@
+{
+  "note": "The commits the published numbers were measured against. SigmaHQ changes weekly, so a verdict count without these is not reproducible.",
+  "measured_on": "2026-10-17",
+  "sources": {
+    "sigma": {
+      "repository": "https://github.com/SigmaHQ/sigma",
+      "commit": "d1c162248fa7d9f895ae0c75009dfe808a150613",
+      "path": "rules/windows",
+      "rules_examined": 2410
+    },
+    "sysmon-modular": {
+      "repository": "https://github.com/olafhartong/sysmon-modular",
+      "commit": "082cba578667a5f57b44a8e64bc02548d2338859",
+      "used_as": "the deployed sensor config under test"
+    },
+    "sysmon-config": {
+      "repository": "https://github.com/SwiftOnSecurity/sysmon-config",
+      "used_as": "the reference config supplying the event ID map and the documented filtering semantics"
+    }
+  },
+  "lab": {
+    "elasticsearch": "8.15.3",
+    "index": "winlogbeat-detection-gate-lab",
+    "documents": 88239,
+    "event_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 17, 18, 22, 23, 26, 28, 255],
+    "captures_span": "2020-09-21 to 2023-07-20",
+    "window": "now-10y",
+    "fields_in_index": 312,
+    "fields_the_corpus_reads": 186,
+    "fields_population_checked": 47,
+    "outage_simulated": "Sysmon event 10, via lab/simulate_outage.py, which is why 21 rules are starved"
+  }
+}

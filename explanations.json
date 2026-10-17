@@ -1,0 +1,246 @@
+{
+  "explanations": {
+    "degraded:destination.domain": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Enable Sysmon Event ID 3 with a NetworkConnect rule in the config. DestinationHostname comes from a reverse-DNS lookup, which Sysmon controls with <DnsLookup> (on by default) and which returns nothing for most CDN and cloud addresses. Then map DestinationHostname to destination.domain in the ingest pipeline, or read Event ID 22 (DnsQuery) QueryName instead, which records the name the process actually asked for.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Event ID 3 is high volume on workstations and servers, since every TCP/UDP connection by included processes is logged. Scope it with include rules for Office binaries and user-writable paths rather than logging all traffic.",
+      "truncated": false,
+      "what": "destination.domain holds the hostname of the remote endpoint for a network connection. Sysmon Event ID 3 records it as DestinationHostname, a reverse-DNS lookup result, not the name the process actually requested.",
+      "why_absent": "DestinationHostname is often empty because reverse DNS lookup fails or returns nothing for CDN and cloud IPs. Sysmon may have name resolution disabled, or the ingest mapping may never copy DestinationHostname into destination.domain."
+    },
+    "degraded:file.code_signature.signed": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Enable ImageLoad (Event ID 7) in the Sysmon config with an ImageLoad rule group. Ship the Microsoft-Windows-Sysmon/Operational channel. Check that the pipeline maps Sysmon Signed to dll.code_signature.signed, or whichever field the rules read.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Image load is one of Sysmon's highest-volume event types. Without include filters scoped to the DLL names these rules target, it floods the pipeline. Signature checks add some load on the host.",
+      "truncated": false,
+      "what": "Sysmon records Signed, Signature and SignatureStatus on image-load events (Event ID 7). ECS has no code_signature.signed: presence is code_signature.exists, validity is code_signature.valid, and the verification result is code_signature.status. ECS also places DLL loads under dll.code_signature.*, not file.code_signature.*.",
+      "why_absent": "Sysmon ships with ImageLoad off by default. The pipeline may map signature data to dll.code_signature.* while the rules read file.code_signature.*, so the field is never populated. Unsigned or unverifiable DLLs report Signed as false."
+    },
+    "degraded:source.domain": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Log Event ID 3 with a NetworkConnect rule group, e.g. an include on Image ending in rundll32.exe. Then confirm your ingest pipeline maps SourceHostname to source.domain, or change the rule to a field that is populated.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Whatever the exception was meant to exclude will now alert. Likely candidates are rundll32 connections from WebDAV (davclnt.dll), Control Panel applets, and OneDrive or Office helpers, plus internal intranet or file-server traffic on domain-joined hosts. I can't give a count.",
+      "truncated": false,
+      "what": "In ECS, source.domain is the domain or hostname of the connection's originating host. For Sysmon Event ID 3 the nearest raw field is SourceHostname, which is frequently blank, so the ECS field is rarely populated.",
+      "why_absent": "Sysmon does not reliably resolve the source hostname. The Elastic pipeline may not map it, and the field may be missing from the index template. Nothing in the data would ever match the exception condition."
+    },
+    "degraded:winlog.event_data.CommandLine->process.command_line": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Enable ProcessCreate (Event ID 1) in the Sysmon config, e.g. <RuleGroup><ProcessCreate onmatch=\"exclude\"/></RuleGroup>. Command lines for other event types need a join on ProcessGuid or an enrichment step.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Without the exception, the rules alert on anything matching their base condition: backup and VSS tooling loading VSS_PS.dll, PowerShell remoting and WinRM management loading WSMAN providers, routine Python network connections, admin or MDM WDAC policy deployment, and ordinary .NET launches writing CLR usage logs.",
+      "truncated": false,
+      "what": "In Sysmon, CommandLine is recorded only on Event ID 1 (process create), as the full launch arguments. Sysmon events 3, 7 and 11 carry Image and ProcessGuid but no CommandLine. ECS pipelines map the field to process.command_line.",
+      "why_absent": "Event ID 1 is not enabled or is filtered in the Sysmon config, or process.command_line is not populated on the non-process-create events these rules read. A pipeline that renames the field also leaves the original name empty."
+    },
+    "degraded:winlog.event_data.Details->registry.*": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Add a RegistryEvent rule group to the Sysmon config with onmatch=\"include\" and TargetObject conditions for the keys of interest. Sysmon logs no registry events without matching rules. Ship the Microsoft-Windows-Sysmon/Operational channel.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Exceptions on Details usually suppress known-good values, so alerts now include benign installer and updater writes to autorun keys (RunOnce, AppInit_DLLs, App Paths), vendor software re-registering itself, and repeated identical writes. Volume depends on how often software installs or updates.",
+      "truncated": false,
+      "what": "Details is the data written to a registry value in Sysmon Event ID 13 (RegistryEvent, value set): the string, or a formatted DWORD/QWORD. Event 12 has no Details. The pipeline stores it as registry.data.strings.",
+      "why_absent": "Details is empty when the Sysmon config has no matching RegistryEvent rule, or when the pipeline renames it so the winlog.event_data.Details path never exists. Read the exact registry.* destination out of the pipeline definition and point the exception at that, rather than assuming the subfield."
+    },
+    "degraded:winlog.event_data.SourceCommandLine": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Enable Event ID 8 with a <CreateRemoteThread onmatch=\"exclude\"> rule in the Sysmon config. For a command line, enrich from Event ID 1 by joining SourceProcessGuid to ProcessGuid, using an ingest enrich policy or a transform.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Without the exception, expect alerts from legitimate software that injects threads: security and EDR agents, debuggers, and some installers or management tools. The exception was likely meant to exclude specific launch patterns of such tools. Volume depends on the software mix, so baseline it first.",
+      "truncated": false,
+      "what": "Intended to hold the command line of the process that created the remote thread. Sysmon Event ID 8 (CreateRemoteThread) records SourceImage, SourceProcessGuid, TargetImage, StartAddress, StartModule and StartFunction, but no source command line.",
+      "why_absent": "Sysmon does not emit a command line on Event 8, so the field is never populated unless a pipeline adds it. Tuning logic written against it silently never matches."
+    },
+    "degraded:winlog.event_data.SourceParentImage": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Sysmon can't produce it for Event 8. Enrich instead: join on SourceProcessGuid to the Event 1 ProcessGuid and copy ParentImage into a new field, using an ingest enrich policy or a transform. Event 8 itself needs a CreateRemoteThread rule in the Sysmon config.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Without the exception, any benign remote thread creation whose source image passes the rule's other conditions will alert. Typical sources include security agents, debuggers, installers, and software launchers that inject threads into other processes.",
+      "truncated": false,
+      "what": "SourceParentImage is not a field Sysmon Event ID 8 (CreateRemoteThread) emits. The event records SourceImage, TargetImage, StartAddress, StartModule and StartFunction, but nothing about the source process's parent.",
+      "why_absent": "The field was probably borrowed from process-creation rule logic or another event schema. Event 8 has no parent field, and no pipeline step adds one, so the exception condition never matches."
+    },
+    "degraded:winlog.event_data.TargetParentProcessId": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Enable the CreateRemoteThread element in the Sysmon config for Event 8. To get the target's parent, enrich by joining TargetProcessGuid to the ProcessGuid of the Event 1 process-create record and read its ParentProcessId or ParentProcessGuid.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Without the exception, expect alerts from legitimate software that injects threads: AV/EDR agents, debuggers, some installers, and UI or overlay utilities. The exact set depends on the environment, so baseline it before relying on the rule.",
+      "truncated": false,
+      "what": "Sysmon Event ID 8 (CreateRemoteThread) has no TargetParentProcessId field. It records source and target process IDs, GUIDs and images, plus thread start address, module and function. A target's parent PID would have to come from elsewhere, such as Event 1.",
+      "why_absent": "The field is never emitted by Sysmon for Event 8, so no config change adds it. The rule author probably assumed a field from another event type or from an enrichment pipeline that isn't deployed here."
+    },
+    "event:23": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Add a <FileDelete onmatch=\"include\"> rule group to the Sysmon config (schema 4.30+, Sysmon 11+). Use onmatch=\"exclude\" with no rules to log all deletes. Events go to Microsoft-Windows-Sysmon/Operational. Use <FileDeleteDetected> (event 26, Sysmon 13+) to log without archiving.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Unfiltered, it is one of the highest-volume Sysmon events, since temp files, browser caches, and updaters delete constantly. Target-path includes (backup extensions, .evtx, IIS log directories) keep it manageable.",
+      "truncated": false,
+      "what": "Sysmon Event ID 23 (FileDelete) records a file deletion by a process, with the process image, user, target filename, hashes, and whether the file was archived. The original file is saved to the ArchiveDirectory.",
+      "why_absent": "The config has no FileDelete rule group, or the Sysmon version predates event 23. Include rules may be too narrow. Archiving is on by default, so deleted files fill the ArchiveDirectory and can exhaust disk. Event 26 is a separate event ID."
+    },
+    "event:9": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Add a RawAccessRead rule group to the Sysmon config, e.g. <RuleGroup onmatch=\"exclude\"><RawAccessRead></RawAccessRead></RuleGroup> to log all, or use onmatch=\"include\" with Image conditions. Events go to Microsoft-Windows-Sysmon/Operational.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Moderate when logging everything. Backup agents, antivirus, disk and forensic tools, and VSS-related services generate recurring events. Exclude known-good Images to cut volume. I can't give a reliable per-host event rate.",
+      "truncated": false,
+      "what": "Sysmon event ID 9 records a process opening a drive or volume for raw read access using the \\\\.\\ device notation, bypassing filesystem APIs. Fields include Image, ProcessId, and Device.",
+      "why_absent": "Sysmon ships with no RawAccessRead rules in many minimal or default-style configs, so the event is off unless the config adds it. Also, an include filter that is too narrow or an exclude list that is too broad suppresses it."
+    },
+    "field:destination.domain": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Add a NetworkConnect element to the Sysmon config, e.g. <NetworkConnect onmatch=\"exclude\"/> to log everything or an include list to narrow it. Ship the Microsoft-Windows-Sysmon/Operational channel with an ECS-mapping pipeline such as the Winlogbeat sysmon module.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Event 3 is among the highest-volume Sysmon events, since every TCP/UDP connection can log. Without filtering, browsers and system services dominate. Most deployments use exclusions or tight include rules.",
+      "truncated": false,
+      "what": "Sysmon Event ID 3 (NetworkConnect) records DestinationHostname, a reverse-DNS (PTR) result for the destination IP. It is not the name the process asked for. Pipelines usually map it to destination.domain, and it is often empty.",
+      "why_absent": "Event 3 not enabled in the Sysmon config. The ingest pipeline maps DestinationHostname to a different field or not at all. PTR lookups fail for most CDN and cloud IPs, leaving the value blank. Domain-based rules often need Event 22 DNSQuery (QueryName) instead."
+    },
+    "field:file.code_signature.signed": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Add an ImageLoad rule group to the Sysmon config (onmatch include, e.g. images loaded by lsass.exe or dbghelp.dll/dbgcore.dll). Ship the Microsoft-Windows-Sysmon/Operational channel with Winlogbeat's sysmon module so the raw fields map to ECS.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Event ID 7 is off by default and very high volume if unfiltered, because every process loads many DLLs. Use narrow include filters on specific processes or DLL names instead of logging all loads.",
+      "truncated": false,
+      "what": "Sysmon records a Signed true/false value, plus Signature and SignatureStatus, on Event ID 7 (Image loaded) and Event ID 6 (Driver loaded). In ECS, signature data lives in code_signature.* fields, such as exists, subject_name, status, valid and trusted. ECS defines no 'signed' sub-field.",
+      "why_absent": "The rules likely carry a raw Sysmon 'Signed' field name mapped to a nonexistent ECS name. Image-load signature data normally lands in dll.code_signature.exists and dll.code_signature.status. Event ID 7 may also not be enabled in the Sysmon config."
+    },
+    "field:winlog.event_data.EventType": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Add a RegistryEvent element (onmatch include or exclude) with TargetObject conditions to the Sysmon config, then ship the Microsoft-Windows-Sysmon/Operational channel with Winlogbeat or Elastic Agent's Windows/Sysmon integration.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Registry activity is very high-volume if left unfiltered. Practical configs include only specific persistence and tampering keys, which keeps volume low. I can't give a reliable events-per-host figure.",
+      "truncated": false,
+      "what": "EventType is the registry operation Sysmon recorded, such as CreateKey, DeleteKey, SetValue, DeleteValue or RenameKey. It appears only on registry events: ID 12 (create/delete), ID 13 (value set) and ID 14 (key rename).",
+      "why_absent": "EventType is present on every registry event Sysmon emits, so an index that holds registry events but not this field lost it somewhere between the sensor and the index: an ingest step that consumes it, a rename, or a drop. Which step cannot be established without a document sample and the deployed pipeline definition side by side. If no registry events are arriving at all, the cause is upstream instead, in the config's RegistryEvent rules or in collection of the Microsoft-Windows-Sysmon/Operational channel."
+    },
+    "field:winlog.event_data.NewName": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Add a <RegistryEvent onmatch=\"include\"> rule to the Sysmon config that matches rename activity, for example an EventType condition of RenameKey on the keys of interest. Forward the Microsoft-Windows-Sysmon/Operational channel with Winlogbeat or Elastic Agent.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Renames are much rarer than registry value sets (Event ID 13), so Event 14 is usually low volume. Volume depends on how broad the include rules are. Broad registry include rules add noise from Event IDs 12 and 13.",
+      "truncated": false,
+      "what": "Sysmon Event ID 14 (RegistryEvent, key and value rename) records the new full registry path in NewName. TargetObject holds the old path. The field is not populated on Event IDs 12 or 13.",
+      "why_absent": "Sysmon is not installed, or the config has no RegistryEvent rules covering renames. The default config or a filtered ruleset may exclude them. Or the Sysmon channel is not shipped. Dynamic mapping only creates the field after the first Event 14 is indexed, so a rename may never have occurred."
+    },
+    "field:winlog.event_data.SourceIsIpv6": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Add a NetworkConnect rule group to the Sysmon config, e.g. <NetworkConnect onmatch=\"exclude\"/> to log everything, or onmatch=\"include\" with filters. Ship Microsoft-Windows-Sysmon/Operational with Winlogbeat or Elastic Agent.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Event ID 3 is one of the highest-volume Sysmon events, since every TCP/UDP connection by any process is logged. Unfiltered collection usually needs exclusions for browsers, system services, and known-good traffic.",
+      "truncated": false,
+      "what": "SourceIsIpv6 is a boolean in Sysmon Event ID 3 (Network connection detected). It is true when the connection's source address is IPv6. The sibling field DestinationIsIpv6 covers the destination address.",
+      "why_absent": "Event ID 3 is not enabled in the Sysmon config. Or the pipeline drops or renames the field, or maps it to ECS fields like source.ip. Or the Sysmon version or ingest mapping doesn't expose it under winlog.event_data."
+    },
+    "field:winlog.event_data.Type": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Run Sysmon 13.0 or later and include a ProcessTampering element in the config, e.g. <ProcessTampering onmatch=\"exclude\"/> inside a RuleGroup. Ship the Microsoft-Windows-Sysmon/Operational channel with Winlogbeat or Elastic Agent.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Generally low volume compared with process creation or network events. Some legitimate software, such as installers, security products and some browsers, can trigger it, so expect to tune with exclude rules.",
+      "truncated": false,
+      "what": "Sysmon Event ID 25 (ProcessTampering) carries a Type field describing the tampering detected. Values are \"Image is locked for access\" and \"Image is replaced\", seen with hollowing and herpaderping-style techniques.",
+      "why_absent": "Sysmon older than version 13, no ProcessTampering rule in the deployed config, the Sysmon channel not collected, or an ingest pipeline that drops or renames the field. With dynamic mapping, the field only appears after the first Event 25 is indexed."
+    },
+    "mismap:winlog.event_data.CommandLine->process.command_line": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Include a ProcessCreate rule in the Sysmon config, for example <ProcessCreate onmatch=\"exclude\"/> to log everything, and collect the Microsoft-Windows-Sysmon/Operational channel. Then edit the 4 rules to use process.command_line.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Process Create is among the highest-volume Sysmon events. Command lines vary widely in length and content, so exact-match filters are brittle and storage grows with them.",
+      "truncated": false,
+      "what": "The full command line, including arguments, of a newly created process. Sysmon records it only in Event ID 1 (Process Create). Rules should query process.command_line, the name the pipeline stores it under.",
+      "why_absent": "Sysmon not installed, or ProcessCreate filtered out by the config. Events 3 (network connection) and 11 (file create) carry no CommandLine, so rules built on them see nothing unless enriched from Event 1. Rules using the old name also never match."
+    },
+    "mismap:winlog.event_data.Details->registry.*": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Sysmon needs RegistryEvent rules (<RegistryEvent onmatch=\"include\">) for the target keys. To fix the rules, look up the exact registry.* destination field in the pipeline definition and rewrite them to it. Do not guess the subfield.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Unfiltered registry monitoring is very high volume, because Windows and applications write registry values constantly. Scope includes to persistence-related keys, such as Run keys, services, AeDebug, and Defender settings.",
+      "truncated": false,
+      "what": "For Sysmon Event ID 13 (registry value set), Details holds the data written to the value, such as a string, a path, or \"DWORD (0x00000001)\". Event IDs 12 (create/delete) and 14 (rename) carry no Details.",
+      "why_absent": "Sysmon has no RegistryEvent rules, or they don't cover the keys the detections target. Also, the pipeline renames the field, so the original winlog.event_data name never appears in indexed documents."
+    },
+    "mismap:winlog.event_data.Hash->file.hash.md5, file.hash.sha1, file.hash.sha256": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Enable a FileCreateStreamHash rule in the Sysmon config and set HashAlgorithms (e.g. md5,sha1,sha256). In the rules, replace winlog.event_data.Hash with the matching file.hash.* field, and compare against bare hex values without the 'SHA256=' prefix.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Browser-downloaded files get Zone.Identifier streams (Mark of the Web), which dominate this event on workstations. Most configs exclude that stream name or filter to specific paths or extensions.",
+      "truncated": false,
+      "what": "Sysmon Event ID 15 (FileCreateStreamHash) logs creation of an NTFS alternate data stream. Hash holds the hash of the stream contents, as ALGO=value pairs for the algorithms set in HashAlgorithms.",
+      "why_absent": "No FileCreateStreamHash rule in the Sysmon config. HashAlgorithms omits the algorithm the rule queries, so that file.hash.* subfield is never populated. The volume is not NTFS. The pipeline drops or renames the field."
+    },
+    "mismap:winlog.event_data.Hashes->dll.hash.md5, dll.hash.sha1, dll.hash.sha256, file.hash.md5, file.hash.sha1, file.hash.sha256": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Sysmon needs <HashAlgorithms>md5,sha1,sha256</HashAlgorithms> (or a subset) and an <ImageLoad> rule group so Event ID 7 is logged. Then rewrite each rule's hash condition to the split field for the algorithm it compares. Confirm in the pipeline definition whether DLL loads populate dll.hash.* or file.hash.*.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Event ID 7 is one of the highest-volume Sysmon events, and the default config does not log it. Scope it with include rules, for example for rundll32.exe or specific paths, rather than logging all image loads.",
+      "truncated": false,
+      "what": "Sysmon's Hashes is one string of comma-separated ALGO=value pairs for the algorithms in HashAlgorithms. In DLL load events (ID 7) it holds the loaded image's hashes. The pipeline splits it into per-algorithm fields. Rules should query those, e.g. dll.hash.sha256, not the raw string.",
+      "why_absent": "Hash fields stay empty if HashAlgorithms omits that algorithm or Event ID 7 is not enabled or is filtered out. A rule matching on IMPHASH has no target among the listed fields, so check the pipeline for a separate imphash field such as dll.pe.imphash."
+    },
+    "mismap:winlog.event_data.Hashes->file.hash.md5, file.hash.sha1, file.hash.sha256": {
+      "confident": true,
+      "frequency_note": "Whether zero is plausible depends on the event. Driver loads are rare on a stable host; image loads are not. Zero across a fleet over days points at collection or at the field name rather than at the environment.",
+      "how_to_collect": "Check which event the rule actually reads before changing any config, because this destination covers events 6, 7, 15, 26 and 29. Driver load needs <DriverLoad>, image load needs <ImageLoad>, stream hashes need <FileCreateStreamHash>. The algorithms come from <HashAlgorithms>, for example md5,sha256 or *; only the algorithms listed there are populated.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Driver loads are infrequent compared to process creation. Most hosts load a fairly stable set of drivers, mostly at boot, with occasional additions after hardware or software installs.",
+      "truncated": false,
+      "what": "The Hashes field holds one string of comma-separated Algorithm=HEX pairs, for example MD5=...,SHA256=..., for the algorithms set in HashAlgorithms. The pipeline sends it to file.hash.* on several events, not only driver loads: 6 (driver load), 7 (image load), 15 (file create stream hash), 26 (file delete detected) and 29 (file executable detected).",
+      "why_absent": "Event ID 6 is not configured, or a DriverLoad filter excludes the drivers. The hash algorithm the rule expects is missing from HashAlgorithms. The pipeline may also have split Hashes into separate fields and dropped the original, so queries on the raw name find nothing."
+    },
+    "mismap:winlog.event_data.Hashes->process.hash.md5, process.hash.sha1, process.hash.sha256": {
+      "confident": true,
+      "frequency_note": "",
+      "how_to_collect": "Rewrite each rule to query the per-algorithm field (process.hash.md5, .sha1 or .sha256) with exact matches instead of string matching on Hashes. The pipeline's listed outputs don't include imphash, so confirm its destination field in the pipeline definition.",
+      "model": "claude-sonnet-5-5",
+      "noise": "No extra events. Hash values are fields on events Sysmon already emits. Computing more algorithms adds some CPU and disk read cost per process creation or image load.",
+      "truncated": false,
+      "what": "Sysmon's Hashes field is one comma-separated string of ALGORITHM=value pairs (for example MD5, SHA1, SHA256, IMPHASH) for the algorithms configured. Here the pipeline splits it into separate process.hash.* fields.",
+      "why_absent": "Sysmon's default HashAlgorithms is SHA1 only. If the config doesn't list md5, sha256 or imphash (or '*'), those values never exist. Also, the pipeline may drop IMPHASH because it only maps md5, sha1 and sha256."
+    },
+    "starved:winlog.event_data.CallTrace": {
+      "confident": true,
+      "frequency_note": "Zero is plausible if Sysmon runs but ProcessAccess logging is not configured or its filters match nothing. Where Event ID 10 is enabled for common targets such as lsass, zero over a long window in an active environment usually indicates a collection or config fault.",
+      "how_to_collect": "Add a ProcessAccess rule group to the Sysmon config, e.g. <RuleGroup><ProcessAccess onmatch=\"include\"><TargetImage condition=\"is\">C:\\Windows\\system32\\lsass.exe</TargetImage></ProcessAccess></RuleGroup>. Events land in Microsoft-Windows-Sysmon/Operational and must be shipped by Winlogbeat.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Unfiltered Event ID 10 is very high volume, since nearly every process opens handles to others constantly. Scope it with TargetImage or GrantedAccess filters, usually to lsass.exe, and exclude known-noisy sources such as AV and EDR agents.",
+      "truncated": false,
+      "what": "CallTrace is the stack trace of the source thread in Sysmon Event ID 10 (ProcessAccess). It lists module+offset addresses, separated by pipes, showing which DLLs the calling code passed through when opening a handle to another process.",
+      "why_absent": "Sysmon not installed, or its config has no ProcessAccess rules (Event ID 10 is off unless configured). Also: the Winlogbeat channel is not collecting Sysmon/Operational, an ingest pipeline drops or renames the field, or the index template maps it but no document carries it."
+    },
+    "starved:winlog.event_data.GrantedAccess": {
+      "confident": true,
+      "frequency_note": "Zero is not plausible if ProcessAccess is configured to capture lsass.exe access, since security and system software open LSASS handles routinely. Zero more likely means Event ID 10 isn't collected, filtered out, or not shipped.",
+      "how_to_collect": "Add a ProcessAccess rule group to the Sysmon config, e.g. <ProcessAccess onmatch=\"include\"> with a TargetImage condition on lsass.exe. Ensure the Microsoft-Windows-Sysmon/Operational channel is shipped by Winlogbeat or Elastic Agent.",
+      "model": "claude-sonnet-5-5",
+      "noise": "Unfiltered Event ID 10 is very high volume, since nearly every process opens handles to others constantly. Scoped to lsass.exe as the target, it is far lower, but AV, EDR and monitoring agents still produce routine hits needing exclusions.",
+      "truncated": false,
+      "what": "GrantedAccess is the access mask (hex, e.g. 0x1010) requested on the target process in Sysmon Event ID 10 (ProcessAccess). It records which rights the source process obtained when opening a handle to the target.",
+      "why_absent": "Sysmon config has no ProcessAccess rules, or an exclude-only config that filters everything out. Sysmon isn't installed, or its channel isn't forwarded. Ingest pipeline renames or drops the field. The template maps the field but no Event 10 documents were ever indexed."
+    }
+  },
+  "generated_at": "2026-10-17T14:56:29Z",
+  "note": "Written by claude-sonnet-5-5, then read in full by a human. Six fields across six causes were corrected by hand: a cause that contradicted the measurement, a wrong Sysmon version, a wrong config element name and an over-narrow framing, a garbled collection instruction, a guessed subfield, and an ECS field that does not exist. Advisory throughout; no note decides a verdict."
+}

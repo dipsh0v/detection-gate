@@ -1,0 +1,84 @@
+[project]
+name = "detection-gate"
+description = "Prove which deployed detections physically cannot fire"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Aytek Aytemur" }]
+keywords = [
+    "detection-engineering",
+    "sigma",
+    "sysmon",
+    "elasticsearch",
+    "detection-as-code",
+    "siem",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: System :: Monitoring",
+    "Typing :: Typed",
+]
+
+# Floors are the versions this was developed and tested against, and ceilings
+# stop the next major from arriving unannounced. pysigma is the one that
+# matters: the code calls SigmaCollection.load_ruleset, reads
+# rule.detection.parsed_condition and dispatches on ConditionAND / OR / NOT,
+# and none of that surface is what 0.11 presented.
+dependencies = [
+    "pysigma>=1.5.1,<2",
+    "pysigma-backend-elasticsearch>=2.1.1,<3",
+    "pysigma-pipeline-sysmon>=2.0.0,<3",
+    "pysigma-pipeline-windows>=2.0.1,<3",
+    "typer>=0.27.3,<1",
+    "pyyaml>=6.0,<7",
+    "defusedxml>=0.7.1,<0.8",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+live = ["elasticsearch>=8.12,<9"]
+# The explainer speaks plain HTTP through requests rather than a vendor SDK,
+# so the extra carries one dependency. It is still a real extra: requests is
+# the whole egress path, and a core install should not be able to reach a
+# model API at all.
+ai = ["requests>=2.34.2,<3"]
+dev = ["pytest>=8,<9"]
+
+[project.urls]
+Homepage = "https://github.com/dipsh0v/detection-gate"
+Source = "https://github.com/dipsh0v/detection-gate"
+Issues = "https://github.com/dipsh0v/detection-gate/issues"
+
+[project.scripts]
+detection-gate = "detection_gate.cli:main"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+# One version, in the module. The SARIF output stamps __version__, so a second
+# copy here is a copy that can disagree with what the report claims.
+version = { attr = "detection_gate.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["detection_gate*"]
+
+[tool.setuptools.package-data]
+detection_gate = ["py.typed"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

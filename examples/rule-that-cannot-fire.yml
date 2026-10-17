@@ -1,0 +1,17 @@
+# Written for this repository. Not a SigmaHQ rule, and not based on one.
+# It exists so you can watch the gate go red without pointing anything at a
+# real corpus. The logsource and the field are real; the rule is not.
+title: EXAMPLE - Synthetic Rule That Cannot Fire
+id: a22b68fa-43ee-4f46-9406-9f22004def0a
+status: experimental
+description: >
+    Converts cleanly, passes lint, and can never match against a Sysmon
+    configuration that does not collect RawAccessRead.
+logsource:
+    product: windows
+    category: raw_access_thread
+detection:
+    selection:
+        Image|endswith: '\rundll32.exe'
+    condition: selection
+level: high

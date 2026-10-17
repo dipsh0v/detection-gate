@@ -1,0 +1,104 @@
+# Put this at .github/workflows/snapshot-refresh.yml in a detection-as-code
+# repo.
+#
+# This is the only job that talks to the SIEM. It runs on a schedule, reads
+# the schema and which fields carry data, and commits the result so the pull
+# request gate can read it offline.
+#
+# Why it is a separate workflow: pull requests from forks run untrusted code,
+# and this job holds a credential. Keeping them apart means the credential is
+# never present on a runner executing a contributor's changes.
+
+name: snapshot refresh
+
+on:
+  schedule:
+    # Nightly, at a minute nobody else uses. Scheduled runners are busiest on
+    # the hour, and this job has no reason to compete for them.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# This job pushes to the default branch. Without a group, a manual dispatch
+# landing on top of the nightly run gives two jobs committing the same file.
+concurrency:
+  group: snapshot-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A self-hosted runner inside the network is the usual answer when the SIEM
+    # is not reachable from the internet:
+    # runs-on: [self-hosted, siem-network]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      # Same pin as the gate, for the same reason, and the same note: the PyPI
+      # name is not claimed yet, so this installs from the repository. Switch
+      # to `pip install "detection-gate[live]==0.1.0"` once it is published.
+      - run: pip install "detection-gate[live] @ git+https://github.com/dipsh0v/detection-gate@v0.1.0"
+
+      - name: read the schema and field population
+        env:
+          # The API key is read from the environment and is not accepted as a
+          # flag: a flag lands in ps output and in any log running under set -x.
+          ELASTIC_API_KEY: ${{ secrets.ELASTIC_API_KEY }}
+          # In env: rather than in the shell body below, so the value is never
+          # part of a command line the shell has to parse.
+          ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
+        run: |
+          # Read-only. One field_caps call plus batched size:0 aggregations.
+          # No detection query is ever run, so this costs the cluster almost
+          # nothing and needs no privilege beyond read on the index pattern.
+          #
+          # --rules-dir narrows the population check to the fields your corpus
+          # actually reads, instead of every field in the index. TLS
+          # verification is always on; add --ca-cert if the cluster uses a
+          # private certificate authority.
+          detection-gate snapshot \
+            --url "${ELASTIC_URL}" \
+            --index-pattern "winlogbeat-*" \
+            --window "now-90d" \
+            --rules-dir rules \
+            --request-timeout 60 \
+            --out .detections/snapshot.json
+
+      - name: commit the snapshot
+        run: |
+          git config user.name "detection-gate"
+          git config user.email "detection-gate@users.noreply.github.com"
+          git add .detections/snapshot.json
+          # Nothing to commit is the normal outcome on a quiet day, and it must
+          # not fail the workflow.
+          git diff --staged --quiet || git commit -m "snapshot: refresh schema and field population"
+          git push
+
+      - name: report what changed since yesterday
+        run: |
+          # The interesting signal is not the snapshot, it is the movement: a
+          # rule that was fireable yesterday and is starved today means
+          # something broke in the last 24 hours, and nobody deployed anything.
+          detection-gate scan --rules-dir rules \
+            --snapshot-file .detections/snapshot.json \
+            --baseline .detections/baseline.json \
+            --ingest-pipeline .detections/ingest-pipeline.yml \
+            --config .detections/sysmon-config.xml \
+            --reference-config .detections/sysmon-reference.xml \
+            --html-out report.html
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: detection-coverage-report
+          path: report.html
+          # The report is sensitive: it names the index pattern, the window,
+          # every field that carries no data and every rule that fails. Keep it
+          # only as long as someone is reading it.
+          retention-days: 7

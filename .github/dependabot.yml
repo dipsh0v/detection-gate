@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+
+  # Actions are pinned to commit SHAs, so this is the only thing that moves
+  # them, and every bump has to be read rather than merged on sight.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
