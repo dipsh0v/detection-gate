@@ -43,6 +43,23 @@ The window is `now-10y` because the public captures the lab loads were recorded
 between September 2020 and July 2023. A short window would report the whole
 corpus as starved and prove nothing.
 
+## Every verdict is decided before the LLM is called
+
+The optional advisory layer is asked to describe the telemetry behind a
+finding, never to judge whether a rule fires, and `--no-ai` produces identical
+verdicts. That is a test, not a promise.
+
+It runs once per cause rather than once per rule, so the whole corpus above
+came to 24 questions. Twenty-four is few enough that a person reads all of them
+before they ship, and this one did: six were wrong and were corrected by hand,
+which `explanations.json` records alongside what was changed. None of the six
+moved a verdict, because none of them could.
+
+What leaves your network, and when, is in [the advisory
+layer](#the-advisory-layer) further down. Short version: nothing, unless you
+pass `--model`, and the command prints the endpoint and the exact contents
+before the first call.
+
 ## Verdicts
 
 | Verdict | Meaning | Root cause | Fix |
